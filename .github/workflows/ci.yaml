@@ -14,5 +14,5 @@ jobs:
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
-      - run: rustup update minimal && rustup default minimal
+      - run: rustup update stable && rustup default stable && rustup set profile minimal
       - run: cargo build --verbose
