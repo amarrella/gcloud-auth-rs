@@ -29,7 +29,8 @@ async fn main() {
     match &cli.command {
         Some(Commands::Auth { auth_commands }) => match *auth_commands {
             Some(AuthCommands::PrintIdToken) => {
-                let id_token = auth::idtoken_from_metadata_server().await;
+                let client = reqwest::Client::new();
+                let id_token = auth::get_idtoken(&client).await;
                 match id_token {
                     Ok(t) => println!("{t}"),
                     Err(e) => println!("{e:?}"),
