@@ -1,6 +1,7 @@
 use reqwest::{self, Client, Error};
 use serde;
 use serde::{Deserialize, Serialize};
+use sqlite::{Connection, State, Value};
 use std::env;
 use tokio::fs;
 use const_format::concatcp;
@@ -38,6 +39,12 @@ pub struct GoogleCredentials {
     #[serde(rename = "type")]
     credential_type: String,
     universe_domain: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revoke_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scopes: Option<Box<[String]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_uri: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +62,7 @@ pub struct GoogleCredentialsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     access_token: Option<String>
 }
+
 
 type IdToken = String;
 
@@ -79,6 +87,21 @@ async fn read_credentials_from_file(path: &str) -> Result<GoogleCredentials, std
     let content = fs::read_to_string(path).await?;
     let credentials: GoogleCredentials = serde_json::from_str(&content)?;
     Ok(credentials)
+}
+
+async fn read_credentials_from_db(
+    connection: &Connection,
+    account: &str
+) -> Result<GoogleCredentials, String> {
+    let query = format!("SELECT value FROM credentials WHERE account = ?");
+    let mut statement = connection.prepare(query).unwrap();
+    statement.bind((1, account));
+    let mut credentials = Err("Didn't fetch credentials");
+    while let Ok(State::Row) = statement.next() {
+        let value = statement.read::<String, _>("value").unwrap();
+        credentials = serde_json::from_str(&value).map_err(|e| { stringify!(e) });
+    }
+    Ok(credentials.expect("couldn't read credentials"))
 }
 
 pub async fn idtoken_from_credentials(
@@ -255,7 +278,10 @@ pub async fn application_default_login(
         account: String::from(""),
         credential_type: String::from("authorized_user"),
         refresh_token: google_credentials_response?.refresh_token.expect("No refresh token"),
-        universe_domain: String::from("googleapis.com")
+        universe_domain: String::from("googleapis.com"),
+        scopes: None,
+        revoke_uri: None,
+        token_uri: None
     };
 
     let credentials_path = get_adc_path();
