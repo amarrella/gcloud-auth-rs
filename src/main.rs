@@ -18,8 +18,17 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum ApplicationDefaultCommands {
+    Login
+}
+
+#[derive(Subcommand)]
 enum AuthCommands {
     PrintIdToken,
+    ApplicationDefault {
+        #[command(subcommand)]
+        app_default_commands: Option<ApplicationDefaultCommands>,
+    }
 }
 
 #[tokio::main]
@@ -27,7 +36,7 @@ async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Auth { auth_commands }) => match *auth_commands {
+        Some(Commands::Auth { auth_commands }) => match auth_commands {
             Some(AuthCommands::PrintIdToken) => {
                 let client = reqwest::Client::new();
                 let id_token = auth::get_idtoken(&client).await;
@@ -35,7 +44,16 @@ async fn main() {
                     Ok(t) => println!("{t}"),
                     Err(e) => println!("{e:?}"),
                 }
-            }
+            },
+            Some(AuthCommands::ApplicationDefault {app_default_commands}) =>
+                match app_default_commands {
+                    Some(ApplicationDefaultCommands::Login) => {
+                        let client = reqwest::Client::new();
+                        auth::application_default_login(&client).await.expect("failed login");
+                    }
+                    None => 
+                        println!("Usage: gcloud auth application-default [command]")
+                }
             None => println!("Usage: gcloud auth [command]"),
         },
         None => println!("Usage gcloud [command]"),
