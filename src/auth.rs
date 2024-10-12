@@ -1,8 +1,7 @@
 use reqwest::{self, Client, Error};
 use serde;
 use serde::{Deserialize, Serialize};
-use sqlite::{Connection, State, Value};
-use std::env;
+use sqlite::{Connection, State};
 use tokio::fs;
 use const_format::concatcp;
 use open;
@@ -15,7 +14,8 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use regex::Regex;
 use tokio::sync::mpsc;
-
+use ini;
+use crate::config;
 
 const CLOUDSDK_CLIENT_ID: &str = "32555940559.apps.googleusercontent.com";
 const CLOUDSDK_CLIENT_NOTSOSECRET: &str = "ZmssLNjJy2998hD4CTg2ejr2";
@@ -32,7 +32,8 @@ const AUTH_CODE_REGEX: &str = "(code=)(.*)(&*)";
 
 #[derive(Serialize, Deserialize)]
 pub struct GoogleCredentials {
-    account: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
     client_id: String,
     client_secret: String,
     refresh_token: String,
@@ -89,19 +90,34 @@ async fn read_credentials_from_file(path: &str) -> Result<GoogleCredentials, std
     Ok(credentials)
 }
 
-async fn read_credentials_from_db(
+async fn get_active_account(
+    config_path: &str
+) -> Result<String, String> {
+    let active_config_path: String = format!("{config_path}/active_config");
+    let active_config_binary = fs::read(&active_config_path).await.expect(
+        format!("Couldn't read active config from {active_config_path}").as_str()
+    );
+    let active_config_str = String::from_utf8(active_config_binary).expect(
+        "Couldn't decode config from {active_config_path}"
+    );
+    let gcloud_config = ini::ini!(&format!("{config_path}/configurations/config_{active_config_str}"));
+    let active_account: String = gcloud_config["core"]["account"].clone().unwrap();
+    return Ok(active_account);
+}
+
+fn read_credentials_from_db(
     connection: &Connection,
     account: &str
 ) -> Result<GoogleCredentials, String> {
-    let query = format!("SELECT value FROM credentials WHERE account = ?");
+    let query = format!("SELECT value FROM credentials WHERE account_id = ?");
     let mut statement = connection.prepare(query).unwrap();
     statement.bind((1, account));
-    let mut credentials = Err("Didn't fetch credentials");
+    let mut credentials = None;
     while let Ok(State::Row) = statement.next() {
         let value = statement.read::<String, _>("value").unwrap();
-        credentials = serde_json::from_str(&value).map_err(|e| { stringify!(e) });
+        credentials = serde_json::from_str(&value).unwrap();
     }
-    Ok(credentials.expect("couldn't read credentials"))
+    Ok(credentials.unwrap())
 }
 
 pub async fn idtoken_from_credentials(
@@ -123,7 +139,7 @@ pub async fn idtoken_from_credentials(
     .json::<GoogleCredentialsResponse>()
     .await;
 
-    Ok(response?.id_token.expect("response didn't contain id token"))
+    Ok(response?.id_token.unwrap())
 }
 
 async fn credentials_response_from_auth_code(
@@ -157,22 +173,9 @@ async fn credentials_response_from_auth_code(
     json
 }
 
-fn get_adc_path() -> String {
-    match env::var("GOOGLE_APPLICATION_CREDENTIALS") {
-        Ok(path) => path,
-        Err(_) => {
-            let home = env::var("HOME");
-            let adc = ".config/gcloud/application_default_credentials.json";
-            match home {
-                Ok(h) =>  format!("{h}/{adc}"),
-                Err(_) => format!("/root/{adc}")
-            }
-        }
-    }
-}
-
 pub async fn get_idtoken(
-    client: &reqwest::Client
+    client: &reqwest::Client,
+    connection: &Connection
 ) -> Result<IdToken, Error> {
     let idtoken = idtoken_from_metadata_server(
         &client
@@ -181,10 +184,10 @@ pub async fn get_idtoken(
     let result = match idtoken {
         Ok(tok) => Ok(tok),
         Err(_) => {
-
-            let credentials_path: String = get_adc_path();
-            let credentials = read_credentials_from_file(&credentials_path).await.expect(
-                format!("Couldn't find credentials at {credentials_path}").as_str()
+            let config_path: String = config::get_gcloud_config_path();
+            let active_account: String = get_active_account(&config_path).await.unwrap();
+            let credentials = read_credentials_from_db(connection, &active_account).expect(
+                format!("Couldn't find credentials at {active_account}").as_str()
             );
             return idtoken_from_credentials(&credentials, &client).await;
         }
@@ -275,7 +278,7 @@ pub async fn application_default_login(
     let credentials = GoogleCredentials {
         client_id: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_ID.to_string(),
         client_secret: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_SECRET.to_string(),
-        account: String::from(""),
+        account: None,
         credential_type: String::from("authorized_user"),
         refresh_token: google_credentials_response?.refresh_token.expect("No refresh token"),
         universe_domain: String::from("googleapis.com"),
@@ -284,7 +287,7 @@ pub async fn application_default_login(
         token_uri: None
     };
 
-    let credentials_path = get_adc_path();
+    let credentials_path = config::get_adc_path();
     let credentials = serde_json::to_string(&credentials).expect(
         "serialization error"
     );

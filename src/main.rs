@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 mod auth;
+mod config;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -39,7 +40,9 @@ async fn main() {
         Some(Commands::Auth { auth_commands }) => match auth_commands {
             Some(AuthCommands::PrintIdToken) => {
                 let client = reqwest::Client::new();
-                let id_token = auth::get_idtoken(&client).await;
+                let config_path: String = config::get_gcloud_config_path();
+                let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
+                let id_token = auth::get_idtoken(&client, &credentials_db).await;
                 match id_token {
                     Ok(t) => println!("{t}"),
                     Err(e) => println!("{e:?}"),
