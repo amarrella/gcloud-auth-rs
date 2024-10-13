@@ -131,6 +131,21 @@ fn read_credentials_from_db(
     Ok(credentials.unwrap())
 }
 
+fn write_credentials_to_db(
+    connection: &Connection,
+    account: &str,
+    credentials: &GoogleCredentials
+) {
+    let query = format!("INSERT INTO credentials (account_id, value) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET value = ?");
+    let credentials_str = serde_json::to_string(credentials).unwrap();
+    let mut statement = connection.prepare(query).unwrap();
+    statement.bind((1, account));
+    statement.bind((2, credentials_str.as_str()));
+    statement.bind((3, credentials_str.as_str()));
+    statement.next().unwrap();
+    ()
+}
+
 pub async fn idtoken_from_credentials(
     creds: &GoogleCredentials,
     client: &reqwest::Client
@@ -177,7 +192,7 @@ async fn credentials_response_from_auth_code(
 
     let response = match response.error_for_status() {
         Ok(res) => Ok(res),
-        Err(e) => Err(dbg!(e))
+        Err(e) => Err(e)
     };
 
     let json = response?.json::<GoogleCredentialsResponse>().await;
@@ -216,14 +231,21 @@ struct AuthCodeQuery {
 pub async fn installed_app_flow_auth(
     client: &Client,
     client_id: &str,
-    client_secret: &str
+    client_secret: &str,
+    scopes: &Vec<String>
 ) -> Result<GoogleCredentialsResponse, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_server_addr = listener.local_addr()?;
     let local_server_uri = local_server_addr.to_string();
     let redirect_uri = format!("http://{local_server_uri}");
+    let mut scope = String::new();
+    for s in scopes {
+        scope.push_str(&s);
+        scope.push(' ');
+    }
+    scope.pop();
     let google_auth_url: String = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope={GOOGLE_CLOUD_PLATFORM_SCOPE}"
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope={scope}"
     );
     
     open::that(format!("{google_auth_url}")).expect(
@@ -284,9 +306,10 @@ pub async fn installed_app_flow_auth(
 }
 
 pub async fn application_default_login(
-    client: &Client
+    client: &Client,
+    scopes: Vec<String>
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let google_credentials_response = installed_app_flow_auth(client, CLOUDSDK_APPLICATION_DEFAULT_CLIENT_ID, CLOUDSDK_APPLICATION_DEFAULT_CLIENT_SECRET).await;
+    let google_credentials_response = installed_app_flow_auth(client, CLOUDSDK_APPLICATION_DEFAULT_CLIENT_ID, CLOUDSDK_APPLICATION_DEFAULT_CLIENT_SECRET, &scopes).await;
     let credentials = GoogleCredentials {
         client_id: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_ID.to_string(),
         client_secret: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_SECRET.to_string(),
@@ -309,34 +332,39 @@ pub async fn application_default_login(
 }
 
 pub async fn user_login(
-    client: &Client, scopes: Vec<String>
+    client: &Client, 
+    connection: &Connection,
+    scopes: Vec<String>
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let google_credentials_response = installed_app_flow_auth(client, CLOUDSDK_CLIENT_ID, CLOUDSDK_CLIENT_NOTSOSECRET).await;
+    let google_credentials_response = installed_app_flow_auth(client, CLOUDSDK_CLIENT_ID, CLOUDSDK_CLIENT_NOTSOSECRET, &scopes).await;
     let credentials = GoogleCredentials {
         client_id: CLOUDSDK_CLIENT_ID.to_string(),
         client_secret: CLOUDSDK_CLIENT_NOTSOSECRET.to_string(),
         credential_type: String::from("authorized_user"),
         refresh_token: google_credentials_response?.refresh_token.expect("No refresh token"),
         universe_domain: String::from("googleapis.com"),
-        scopes: None,
+        scopes: Some(scopes),
         revoke_uri: Some("https://accounts.google.com/o/oauth2/revoke".to_string()),
         token_uri: Some(GOOGLE_OAUTH_TOKEN_URL.to_string())
     };
-    let idToken = idtoken_from_credentials(&credentials, client).await.unwrap();
-    dbg!(&idToken);
-    let idTokenHeader = jsonwebtoken::decode_header(&idToken).unwrap();
-    let googleKeys = client.get(
+    let id_token = idtoken_from_credentials(&credentials, client).await.unwrap();
+    let id_token_header = jsonwebtoken::decode_header(&id_token).unwrap();
+    let google_keys = client.get(
         "https://www.googleapis.com/oauth2/v3/certs"
     ).send().await?.error_for_status()?.json::<GoogleKeysResponse>().await.unwrap();
-    let googleKey = googleKeys.keys.iter().find(|k| {
-        k.common.key_id == idTokenHeader.kid
+    let google_key = google_keys.keys.iter().find(|k| {
+        k.common.key_id == id_token_header.kid
     }).unwrap();
-    let decodingKey = jsonwebtoken::DecodingKey::from_jwk(googleKey).unwrap();
+    let decoding_key = jsonwebtoken::DecodingKey::from_jwk(google_key).unwrap();
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
     validation.set_audience(&[CLOUDSDK_CLIENT_ID]);
     validation.set_issuer(&["https://accounts.google.com"]);
-    let idTokenJwt = jsonwebtoken::decode::<GoogleClaims>(&idToken, &decodingKey, &validation).unwrap();
-    let account = idTokenJwt.claims.email;
-    dbg!(account);
+    let id_token_jwt = jsonwebtoken::decode::<GoogleClaims>(&id_token, &decoding_key, &validation).unwrap();
+    let account = id_token_jwt.claims.email.unwrap();
+    write_credentials_to_db(
+        &connection,
+        &account.as_str(),
+        &credentials
+    );
     Ok(())
 }
