@@ -3,10 +3,10 @@ mod auth;
 mod config;
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(version, about, long_about = None, arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -14,7 +14,7 @@ enum Commands {
     /// Auth
     Auth {
         #[command(subcommand)]
-        auth_commands: Option<AuthCommands>,
+        auth_commands: AuthCommands,
     },
 }
 
@@ -31,7 +31,7 @@ enum AuthCommands {
     PrintAccessToken,
     ApplicationDefault {
         #[command(subcommand)]
-        app_default_commands: Option<ApplicationDefaultCommands>,
+        app_default_commands: ApplicationDefaultCommands,
     }
 }
 
@@ -40,8 +40,8 @@ async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Auth { auth_commands }) => match auth_commands {
-            Some(AuthCommands::Login) => {
+        Commands::Auth { auth_commands } => match auth_commands {
+            AuthCommands::Login => {
                 let client: reqwest::Client = reqwest::Client::new();
                 let config_path: String = config::get_gcloud_config_path();
                 let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
@@ -61,7 +61,7 @@ async fn main() {
                 ).await.expect("Login failed");
                 println!("Login successful");
             },
-            Some(AuthCommands::PrintIdentityToken) => {
+            AuthCommands::PrintIdentityToken => {
                 let client = reqwest::Client::new();
                 let config_path: String = config::get_gcloud_config_path();
                 let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
@@ -71,7 +71,7 @@ async fn main() {
                     Err(e) => println!("Login required")
                 }
             },
-            Some(AuthCommands::PrintAccessToken) => {
+            AuthCommands::PrintAccessToken => {
                 let client = reqwest::Client::new();
                 let config_path: String = config::get_gcloud_config_path();
                 let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
@@ -81,16 +81,16 @@ async fn main() {
                     Err(e) => println!("Login required")
                 }
             },
-            Some(AuthCommands::ApplicationDefault {app_default_commands}) =>
+            AuthCommands::ApplicationDefault {app_default_commands} =>
                 match app_default_commands {
-                    Some(ApplicationDefaultCommands::PrintAccessToken) => {
+                    ApplicationDefaultCommands::PrintAccessToken => {
                         let client = reqwest::Client::new();
                         match auth::get_adc_accesstoken(&client).await {
                             Ok(t) => print!("{t}"),
                             Err(e) => println!("Login required")
                         }
                     },
-                    Some(ApplicationDefaultCommands::Login) => {
+                    ApplicationDefaultCommands::Login => {
                         let client = reqwest::Client::new();
                         let scopes = [
                             "openid",
@@ -104,11 +104,7 @@ async fn main() {
                         auth::application_default_login(&client, scopes).await.expect("Login failed");
                         println!("Login successful")
                     }
-                    None => 
-                    println!("Usage: gcloud auth application-default [command]")
                 }
-            None => println!("Usage: gcloud auth [command]"),
-        },
-        None => println!("Usage gcloud [command]"),
+        }
     }
 }
