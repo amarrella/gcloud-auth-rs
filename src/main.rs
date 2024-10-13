@@ -58,7 +58,8 @@ async fn main() {
                     &client,
                     &credentials_db,
                     scopes
-                ).await;
+                ).await.expect("Login failed");
+                println!("Login successful");
             },
             Some(AuthCommands::PrintIdentityToken) => {
                 let client = reqwest::Client::new();
@@ -100,10 +101,11 @@ async fn main() {
                             "https://www.googleapis.com/auth/compute",
                             "https://www.googleapis.com/auth/accounts.reauth"
                           ].iter().map(|s| s.to_string()).collect();
-                        auth::application_default_login(&client, scopes).await.expect("failed login");
+                        auth::application_default_login(&client, scopes).await.expect("Login failed");
+                        println!("Login successful")
                     }
                     None => 
-                        println!("Usage: gcloud auth application-default [command]")
+                    println!("Usage: gcloud auth application-default [command]")
                 }
             None => println!("Usage: gcloud auth [command]"),
         },
