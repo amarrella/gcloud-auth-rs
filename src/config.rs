@@ -1,11 +1,9 @@
 use std::env;
 
 pub fn get_config_home() -> String {
-    return env::var("XDG_CONFIG_HOME").or(
-        env::var("HOME").map(
-            |h| { format!("{h}/.config") }
-        )
-    ).unwrap();
+    return env::var("XDG_CONFIG_HOME")
+        .or(env::var("HOME").map(|h| format!("{h}/.config")))
+        .unwrap();
 }
 
 pub fn get_gcloud_config_path() -> String {
