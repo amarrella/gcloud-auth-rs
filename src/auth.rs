@@ -16,6 +16,7 @@ use regex::Regex;
 use tokio::sync::mpsc;
 use ini;
 use crate::config;
+use jsonwebtoken;
 
 const CLOUDSDK_CLIENT_ID: &str = "32555940559.apps.googleusercontent.com";
 const CLOUDSDK_CLIENT_NOTSOSECRET: &str = "ZmssLNjJy2998hD4CTg2ejr2";
@@ -30,10 +31,8 @@ const GOOGLE_OAUTH_TOKEN_URL: &str = concatcp!(
 const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const AUTH_CODE_REGEX: &str = "(code=)(.*)(&*)";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GoogleCredentials {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    account: Option<String>,
     client_id: String,
     client_secret: String,
     refresh_token: String,
@@ -43,12 +42,12 @@ pub struct GoogleCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     revoke_uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    scopes: Option<Box<[String]>>,
+    scopes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     token_uri: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GoogleCredentialsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_in: Option<u32>,
@@ -62,6 +61,18 @@ pub struct GoogleCredentialsResponse {
     refresh_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_token: Option<String>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GoogleClaims {
+    aud: String,
+    email: Option<String>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct GoogleKeysResponse {
+    keys: Vec<
+        jsonwebtoken::jwk::Jwk
+    >
 }
 
 
@@ -136,6 +147,7 @@ pub async fn idtoken_from_credentials(
     )
     .send()
     .await?
+    .error_for_status()?
     .json::<GoogleCredentialsResponse>()
     .await;
 
@@ -189,7 +201,7 @@ pub async fn get_idtoken(
             let credentials = read_credentials_from_db(connection, &active_account).expect(
                 format!("Couldn't find credentials at {active_account}").as_str()
             );
-            return idtoken_from_credentials(&credentials, &client).await;
+            idtoken_from_credentials(&credentials, &client).await
         }
     };
 
@@ -278,7 +290,6 @@ pub async fn application_default_login(
     let credentials = GoogleCredentials {
         client_id: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_ID.to_string(),
         client_secret: CLOUDSDK_APPLICATION_DEFAULT_CLIENT_SECRET.to_string(),
-        account: None,
         credential_type: String::from("authorized_user"),
         refresh_token: google_credentials_response?.refresh_token.expect("No refresh token"),
         universe_domain: String::from("googleapis.com"),
@@ -294,5 +305,38 @@ pub async fn application_default_login(
     fs::write(credentials_path, credentials).await.expect(
         "failed writing credentials"
     );
+    Ok(())
+}
+
+pub async fn user_login(
+    client: &Client, scopes: Vec<String>
+) -> Result<(), Box<dyn std::error::Error>> {
+    let google_credentials_response = installed_app_flow_auth(client, CLOUDSDK_CLIENT_ID, CLOUDSDK_CLIENT_NOTSOSECRET).await;
+    let credentials = GoogleCredentials {
+        client_id: CLOUDSDK_CLIENT_ID.to_string(),
+        client_secret: CLOUDSDK_CLIENT_NOTSOSECRET.to_string(),
+        credential_type: String::from("authorized_user"),
+        refresh_token: google_credentials_response?.refresh_token.expect("No refresh token"),
+        universe_domain: String::from("googleapis.com"),
+        scopes: None,
+        revoke_uri: Some("https://accounts.google.com/o/oauth2/revoke".to_string()),
+        token_uri: Some(GOOGLE_OAUTH_TOKEN_URL.to_string())
+    };
+    let idToken = idtoken_from_credentials(&credentials, client).await.unwrap();
+    dbg!(&idToken);
+    let idTokenHeader = jsonwebtoken::decode_header(&idToken).unwrap();
+    let googleKeys = client.get(
+        "https://www.googleapis.com/oauth2/v3/certs"
+    ).send().await?.error_for_status()?.json::<GoogleKeysResponse>().await.unwrap();
+    let googleKey = googleKeys.keys.iter().find(|k| {
+        k.common.key_id == idTokenHeader.kid
+    }).unwrap();
+    let decodingKey = jsonwebtoken::DecodingKey::from_jwk(googleKey).unwrap();
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+    validation.set_audience(&[CLOUDSDK_CLIENT_ID]);
+    validation.set_issuer(&["https://accounts.google.com"]);
+    let idTokenJwt = jsonwebtoken::decode::<GoogleClaims>(&idToken, &decodingKey, &validation).unwrap();
+    let account = idTokenJwt.claims.email;
+    dbg!(account);
     Ok(())
 }
