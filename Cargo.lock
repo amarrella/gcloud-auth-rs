@@ -345,7 +345,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gcloud-rs"
+name = "gcloud-auth-rs"
 version = "0.1.0"
 dependencies = [
  "clap",
