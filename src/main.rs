@@ -20,13 +20,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ApplicationDefaultCommands {
-    Login
+    Login,
+    PrintAccessToken
 }
 
 #[derive(Subcommand)]
 enum AuthCommands {
     Login,
     PrintIdentityToken,
+    PrintAccessToken,
     ApplicationDefault {
         #[command(subcommand)]
         app_default_commands: Option<ApplicationDefaultCommands>,
@@ -64,12 +66,29 @@ async fn main() {
                 let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
                 let id_token = auth::get_idtoken(&client, &credentials_db).await;
                 match id_token {
+                    Ok(t) => print!("{t}"),
+                    Err(e) => println!("Login required")
+                }
+            },
+            Some(AuthCommands::PrintAccessToken) => {
+                let client = reqwest::Client::new();
+                let config_path: String = config::get_gcloud_config_path();
+                let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
+                let access_token = auth::get_user_accesstoken(&client, &credentials_db).await;
+                match access_token {
                     Ok(t) => println!("{t}"),
                     Err(e) => println!("Login required")
                 }
             },
             Some(AuthCommands::ApplicationDefault {app_default_commands}) =>
                 match app_default_commands {
+                    Some(ApplicationDefaultCommands::PrintAccessToken) => {
+                        let client = reqwest::Client::new();
+                        match auth::get_adc_accesstoken(&client).await {
+                            Ok(t) => print!("{t}"),
+                            Err(e) => println!("Login required")
+                        }
+                    },
                     Some(ApplicationDefaultCommands::Login) => {
                         let client = reqwest::Client::new();
                         let scopes = [

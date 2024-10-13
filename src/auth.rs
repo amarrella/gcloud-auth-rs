@@ -77,12 +77,30 @@ struct GoogleKeysResponse {
 
 
 type IdToken = String;
+type AccessToken = String;
 
 pub async fn idtoken_from_metadata_server(
     client: &reqwest::Client
 ) -> Result<IdToken, Error> {
     let jwt = client.get(
         format!("{GOOGLE_METADATA_URL}default/identity?audience={CLOUDSDK_CLIENT_ID}")
+    ).header(
+        "Metadata-Flavor",
+        "Google"
+    )
+    .send()
+    .await?
+    .text()
+    .await;
+
+    jwt
+}
+
+pub async fn accesstoken_from_metadata_server(
+    client: &reqwest::Client
+) -> Result<AccessToken, Error> {
+    let jwt = client.get(
+        format!("{GOOGLE_METADATA_URL}default/token?audience={CLOUDSDK_CLIENT_ID}")
     ).header(
         "Metadata-Flavor",
         "Google"
@@ -146,10 +164,10 @@ fn write_credentials_to_db(
     ()
 }
 
-pub async fn idtoken_from_credentials(
+async fn tokens_from_credentials(
     creds: &GoogleCredentials,
-    client: &reqwest::Client
-) -> Result<IdToken, Error> {
+    client: &Client
+) -> Result<GoogleCredentialsResponse, reqwest::Error> {
     let response = client.post(
         GOOGLE_OAUTH_TOKEN_URL
     ).form(
@@ -166,7 +184,23 @@ pub async fn idtoken_from_credentials(
     .json::<GoogleCredentialsResponse>()
     .await;
 
+    response
+}
+
+pub async fn idtoken_from_credentials(
+    creds: &GoogleCredentials,
+    client: &reqwest::Client
+) -> Result<IdToken, Error> {
+    let response = tokens_from_credentials(creds, client).await;
     Ok(response?.id_token.unwrap())
+}
+
+pub async fn accesstoken_from_credentials(
+    creds: &GoogleCredentials,
+    client: &reqwest::Client
+) -> Result<AccessToken, Error> {
+    let response = tokens_from_credentials(creds, client).await;
+    Ok(response?.access_token.unwrap())
 }
 
 async fn credentials_response_from_auth_code(
@@ -217,6 +251,50 @@ pub async fn get_idtoken(
                 format!("Couldn't find credentials at {active_account}").as_str()
             );
             idtoken_from_credentials(&credentials, &client).await
+        }
+    };
+
+    result
+}
+
+pub async fn get_user_accesstoken(
+    client: &reqwest::Client,
+    connection: &Connection
+) -> Result<AccessToken, Error> {
+    let accesstoken = accesstoken_from_metadata_server(
+        &client
+    ).await;
+
+    let result = match accesstoken {
+        Ok(tok) => Ok(tok),
+        Err(_) => {
+            let config_path: String = config::get_gcloud_config_path();
+            let active_account: String = get_active_account(&config_path).await.unwrap();
+            let credentials = read_credentials_from_db(connection, &active_account).expect(
+                format!("Couldn't find credentials at {active_account}").as_str()
+            );
+            accesstoken_from_credentials(&credentials, &client).await
+        }
+    };
+
+    result
+}
+
+pub async fn get_adc_accesstoken(
+    client: &reqwest::Client,
+) -> Result<AccessToken, Error> {
+    let accesstoken = accesstoken_from_metadata_server(
+        &client
+    ).await;
+
+    let result = match accesstoken {
+        Ok(tok) => Ok(tok),
+        Err(_) => {
+            let adc_path: String = config::get_adc_path();
+            let credentials = read_credentials_from_file(&adc_path).await.expect(
+                format!("Couldn't find application default credentials").as_str()
+            );
+            accesstoken_from_credentials(&credentials, &client).await
         }
     };
 
