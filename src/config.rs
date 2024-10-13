@@ -22,13 +22,9 @@ pub fn get_adc_path() -> String {
     match env::var("GOOGLE_APPLICATION_CREDENTIALS") {
         Ok(path) => path,
         Err(_) => {
-            let home = env::var("HOME");
             let config_home: String = get_gcloud_config_path();
             let adc = format!("{config_home}/application_default_credentials.json");
-            match home {
-                Ok(h) =>  format!("{h}/{adc}"),
-                Err(_) => format!("/root/{adc}")
-            }
+            adc
         }
     }
 }
