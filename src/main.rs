@@ -25,7 +25,7 @@ enum ApplicationDefaultCommands {
 
 #[derive(Subcommand)]
 enum AuthCommands {
-    PrintIdToken,
+    PrintIdentityToken,
     ApplicationDefault {
         #[command(subcommand)]
         app_default_commands: Option<ApplicationDefaultCommands>,
@@ -38,7 +38,7 @@ async fn main() {
 
     match &cli.command {
         Some(Commands::Auth { auth_commands }) => match auth_commands {
-            Some(AuthCommands::PrintIdToken) => {
+            Some(AuthCommands::PrintIdentityToken) => {
                 let client = reqwest::Client::new();
                 let config_path: String = config::get_gcloud_config_path();
                 let credentials_db = sqlite::Connection::open(format!("{config_path}/credentials.db")).unwrap();
