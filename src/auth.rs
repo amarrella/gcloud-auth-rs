@@ -157,9 +157,9 @@ fn write_credentials_to_db(
     let query = format!("INSERT INTO credentials (account_id, value) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET value = ?");
     let credentials_str = serde_json::to_string(credentials).unwrap();
     let mut statement = connection.prepare(query).unwrap();
-    statement.bind((1, account));
-    statement.bind((2, credentials_str.as_str()));
-    statement.bind((3, credentials_str.as_str()));
+    statement.bind((1, account)).unwrap();
+    statement.bind((2, credentials_str.as_str())).unwrap();
+    statement.bind((3, credentials_str.as_str())).unwrap();
     statement.next().unwrap();
     ()
 }
